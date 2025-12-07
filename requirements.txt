@@ -1,0 +1,39 @@
+# Core Dependencies
+python-telegram-bot==21.0
+python-dotenv==1.0.0
+requests==2.31.0
+
+# Video Processing
+yt-dlp==2024.4.9
+
+# NumPy - Downgraded to <2.0.0 to fix binary incompatibility with opencv-python
+numpy<2.0.0
+
+# OpenCV - Compatible with NumPy >=2.0
+opencv-python==4.8.1.78
+opencv-contrib-python==4.8.1.78
+
+# Audio Processing
+gTTS==2.5.1
+# librosa, soundfile, scipy removed (using FFmpeg)
+
+# AI Enhancement (PyTorch) - Optional (Install manually for GPU)
+# RealESRGAN & GFPGAN - Optional (Install manually for GPU)
+
+# Utilities
+tqdm==4.66.1
+Pillow==10.1.0
+
+# YouTube Upload
+google-api-python-client==2.108.0
+google-auth-oauthlib==1.1.0
+google-auth-httplib2==0.1.1
+
+# AI Caption Generation (Gemini)
+google-generativeai>=0.8.3
+
+# YOLO (Ultralytics) - Optional
+
+# Machine Learning (Active Learning)
+pandas==2.2.2
+scikit-learn==1.5.0
