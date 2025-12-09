@@ -27,9 +27,14 @@ FONT_ZIP_URL = "https://github.com/rsms/inter/releases/download/v4.0/Inter-4.0.z
 LOCAL_FONT_DIR = os.path.join("assets", "fonts")
 LOCAL_FONT_PATH = os.path.join(LOCAL_FONT_DIR, "Inter-Bold.ttf")
 
-# Shorts safe margins (percentage of height)
-SAFE_TOP = 0.08
-SAFE_BOTTOM = 0.92
+# Text Lane Configuration (Vertical Video Optimized)
+TEXT_LANES = {
+    "caption": 0.78,   # AI Captions (Above fixed text)
+    "fixed": 0.88,     # Fixed Branding/Tagline (Bottom)
+    "top": 0.08,       # Top Warning/Info
+    "center": 0.50     # Dead Center
+}
+LANE_PADDING = 0.04
 
 class TextOverlay:
     _drawtext_supported: Optional[bool] = None
@@ -138,28 +143,51 @@ class TextOverlay:
         if len(text) <= max_chars: return text
         return textwrap.fill(text, width=max_chars, break_long_words=False, break_on_hyphens=False)
 
-    def _calc_y_drawtext(self, position: str) -> str:
-        if position == "top": return f"h*{SAFE_TOP}"
-        if position == "center": return "(h-text_h)/2"
-        return f"h*{SAFE_BOTTOM}-text_h"
+    def _calc_y_drawtext(self, lane: str) -> str:
+        """
+        Calculates Y position based on strict vertical lanes.
+        Formula: y = h * lane_pct - text_h / 2
+        """
+        # Default to caption if unknown
+        pct = TEXT_LANES.get(lane, TEXT_LANES["caption"])
+        
+        # Center is special case
+        if lane == "center":
+            return "(h-text_h)/2"
+            
+        return f"h*{pct}-text_h/2"
 
-    def _create_ass_file(self, text: str, position: str) -> str:
+    def _create_ass_file(self, text: str, lane: str) -> str:
         """Generates a temporary .ass subtitle file."""
         ass_path = f"temp/overlay_{os.getpid()}.ass"
         os.makedirs("temp", exist_ok=True)
         
         # Alignment: 2=Bottom Center, 8=Top Center, 5=Middle Center
         alignment = 2
-        margin_v = 50 
         
-        if position == "top":
+        # Calc MarginV based on Lane Percentage
+        # ASS MarginV is distance from bottom (for align=2) or top (for align=8)
+        # We standarize on Alignment 2 (Bottom) for most things except Top lane
+        
+        pct = TEXT_LANES.get(lane, TEXT_LANES["caption"])
+        
+        if lane == "top":
             alignment = 8
-            margin_v = int(1920 * SAFE_TOP)
-        elif position == "center":
+            margin_v = int(1920 * pct)
+        elif lane == "center":
             alignment = 5
-        elif position == "bottom":
-             # ASS MarginV is from bottom for Alignment 2
-             margin_v = int(1920 * (1.0 - SAFE_BOTTOM)) + 20
+            margin_v = 0
+        else:
+             # Bottom Logic (Caption/Fixed)
+             # MarginV = Distance from Bottom
+             # If lane is at 0.88 (Top-Down), distance from bottom is 1.0 - 0.88 = 0.12
+             margin_v = int(1920 * (1.0 - pct))
+             
+             # Adjust centering: standard ASS anchors at baseline? No, alignment 2 is bottom-center of the box.
+             # We want the CENTER of the text to be at `h * pct`.
+             # Approx adjustment: subtract half font size (30px)
+             # margin_v -= 30 
+             # Let's trust pure percentage first.
 
         escaped_text = self._escape_ass(text)
 
@@ -181,51 +209,79 @@ Dialogue: 0,0:00:00.00,9:59:59.00,Default,,0,0,0,,{escaped_text}
             f.write(ass_content)
         return ass_path
 
-    def add_overlay(self, video_path, output_path, text, position="bottom", size=60):
+    def add_overlay(self, video_path, output_path, text, lane="caption", size=60):
         """
-        Main entry point with Strict Fallback Logic.
+        Main entry point with Strict Fallback Logic and Lanes.
         """
         if not text or not video_path or not os.path.exists(video_path):
             return False
 
-        wrapped_text = self._wrap_text(text)
+        if lane == "caption":
+             # Captions need tighter wrapping
+             wrapped_text = self._wrap_text(text, max_chars=20)
+        else:
+             wrapped_text = self._wrap_text(text, max_chars=24)
+        
+        # 1. Dynamic Font Scaling (Overflow Protection)
+        line_count = wrapped_text.count("\n") + 1
+        
+        # Safe-Guard: If text is long, reduce size automatically
+        if line_count == 2:
+            size = int(size * 0.85) # 60 -> 51
+        elif line_count >= 3:
+            size = int(size * 0.70) # 60 -> 42
+            
+        # Extra Safe-Guard: Long words (if wrap didn't help enough)
+        longest_line = max([len(line) for line in wrapped_text.split('\n')])
+        if longest_line > 15:
+             # Estimated width check: 15 chars * 0.7 * size = width
+             # If size is 60: 15 * 42 = 630 (Safe)
+             # If longest_line is 22: 22 * 42 = 924 (Risk)
+             if longest_line > 20: 
+                  size = int(size * 0.9)
+
+        
+        # Sanity Check Arguments
+        if lane not in TEXT_LANES:
+            logger.warning(f"⚠️ Unknown text lane '{lane}', defaulting to 'caption'")
+            lane = "caption"
 
         # Decision Tree
         use_drawtext = True
         
         if self._drawtext_failed_once:
              use_drawtext = False
-             logger.info("Overlay Method: SUBTITLES (previous_failure)")
+             logger.info(f"Overlay Method: SUBTITLES (previous_failure) Lane:{lane}")
         elif not self._drawtext_supported:
              use_drawtext = False
-             logger.info("Overlay Method: SUBTITLES (drawtext_unavailable)")
+             logger.info(f"Overlay Method: SUBTITLES (drawtext_unavailable) Lane:{lane}")
         elif not os.path.exists(LOCAL_FONT_PATH):
              use_drawtext = False
-             logger.info("Overlay Method: SUBTITLES (font_missing)")
+             logger.info(f"Overlay Method: SUBTITLES (font_missing) Lane:{lane}")
         elif self._has_unicode_or_emoji(text):
              use_drawtext = False
-             logger.info("Overlay Method: SUBTITLES (unicode_unsafe)")
+             logger.info(f"Overlay Method: SUBTITLES (unicode_unsafe) Lane:{lane}")
         else:
-             logger.info("Overlay Method: DRAWTEXT (attempting)")
+             logger.info(f"Overlay Method: DRAWTEXT (attempting) Lane:{lane}")
 
         # Attempt Execution
         if use_drawtext:
-            success = self._apply_drawtext(video_path, output_path, wrapped_text, position, size)
+            success = self._apply_drawtext(video_path, output_path, wrapped_text, lane, size)
             if success:
                 return True
             else:
                 # If drawtext failed, mark it as broken and fallback IMMEDIATELY
                 self._drawtext_failed_once = True
                 logger.warning("⚠️ Drawtext failed! Falling back to SUBTITLES...")
-                return self._apply_ass(video_path, output_path, wrapped_text, position)
+                return self._apply_ass(video_path, output_path, wrapped_text, lane)
         else:
-            return self._apply_ass(video_path, output_path, wrapped_text, position)
+            return self._apply_ass(video_path, output_path, wrapped_text, lane)
 
 
-    def _apply_drawtext(self, video_path, output_path, text, position, size):
+    def _apply_drawtext(self, video_path, output_path, text, lane, size):
         try:
             safe_text = self._escape_drawtext(text)
-            y_expr = self._calc_y_drawtext(position)
+            y_expr = self._calc_y_drawtext(lane)
             
             # Dynamic Border/Box
             border_w = min(int(size * 0.25), 30)
@@ -236,6 +292,9 @@ Dialogue: 0,0:00:00.00,9:59:59.00,Default,,0,0,0,,{escaped_text}
             # MANDATORY: use_fontconfig=0 to ignore system fonts and prevent crashes
             # MANDATORY: fontfile must be absolute path, colons escaped for filter
             font_path = os.path.abspath(LOCAL_FONT_PATH).replace("\\", "/").replace(":", "\\:")
+            
+            # X Calculation: Center
+            # x=(w-text_w)/2
 
             vf_filter = (
                 f"drawtext="
@@ -270,9 +329,9 @@ Dialogue: 0,0:00:00.00,9:59:59.00,Default,,0,0,0,,{escaped_text}
             logger.error(f"Drawtext execution crashed: {e}")
             return False
 
-    def _apply_ass(self, video_path, output_path, text, position):
+    def _apply_ass(self, video_path, output_path, text, lane):
         try:
-            ass_file = self._create_ass_file(text, position)
+            ass_file = self._create_ass_file(text, lane)
             # Escape for filter syntax: C:/Path -> C\:/Path
             safe_ass_path = os.path.abspath(ass_file).replace("\\", "/").replace(":", "\\:")
             vf_filter = f"subtitles='{safe_ass_path}'"
@@ -303,5 +362,5 @@ Dialogue: 0,0:00:00.00,9:59:59.00,Default,,0,0,0,,{escaped_text}
 # Global Instance
 overlay_engine = TextOverlay()
 
-def apply_text_overlay_safe(input_path, output_path, text, position="bottom", size=60):
-    return overlay_engine.add_overlay(input_path, output_path, text, position, size)
+def apply_text_overlay_safe(input_path, output_path, text, lane="caption", size=60):
+    return overlay_engine.add_overlay(input_path, output_path, text, lane, size)
