@@ -604,7 +604,7 @@ def compile_with_transitions(input_video: Path, title: str, aggressive_watermark
                         current_video,
                         text_video_1,
                         ai_caption_text,
-                        position="bottom", # Always bottom for AI caption
+                        lane="caption", # New API: "caption" lane (0.78)
                         size=TEXT_OVERLAY_SIZE
                     )
                     if success_1 and os.path.exists(text_video_1):
@@ -615,13 +615,25 @@ def compile_with_transitions(input_video: Path, title: str, aggressive_watermark
                     logger.info(f"✨ Step 2.5b: Applying Fixed Text: {TEXT_OVERLAY_TEXT}")
                     text_video_2 = os.path.join(job_dir, "text_overlay_2.mp4")
                     
-                    pos = "bottom_low" if ai_caption_text else TEXT_OVERLAY_POSITION
+                    # Map old logic to new Lanes
+                    # If caption exists, use "fixed" (0.88 - Bottom)
+                    # If no caption, check env. If env says "bottom", use "fixed". If "center", use "center".
                     
+                    target_lane = "fixed" # Default to bottom/branding
+                    if TEXT_OVERLAY_POSITION == "center":
+                        target_lane = "center"
+                    elif TEXT_OVERLAY_POSITION == "top":
+                        target_lane = "top"
+                        
+                    # Force "fixed" if caption is present to prevent overlap (unless top/center explicit)
+                    if ai_caption_text and target_lane == "caption":
+                        target_lane = "fixed"
+
                     success_2 = apply_text_overlay_safe(
                         current_video,
                         text_video_2,
                         TEXT_OVERLAY_TEXT,
-                        position=pos,
+                        lane=target_lane,
                         size=TEXT_OVERLAY_SIZE
                     )
                     if success_2 and os.path.exists(text_video_2):
